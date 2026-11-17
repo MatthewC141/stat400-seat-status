@@ -31,6 +31,9 @@
   li time { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
   a.reg { display: inline-block; margin-bottom: 20px; }
   .err { color: var(--bad); font-size: .9rem; }
+  .start { margin: -8px 0 20px; }
+  .start a { display: inline-block; padding: 10px 18px; border-radius: 10px; background: var(--ok); color: #fff; font-weight: 600; text-decoration: none; }
+  .start p { color: var(--muted); font-size: .85rem; margin: 6px 0 0; }
 </style>
 </head>
 <body>
@@ -38,6 +41,11 @@
 <p class="sub" id="term">Loading...</p>
 
 <div class="state" id="state"><div class="dot"></div><div><b id="stateText">Loading...</b><span id="stateDetail"></span></div></div>
+
+<div class="start" id="start" hidden>
+  <a id="startLink" href="uiuc-seat-watcher://start">&#9654; Start watcher on this PC</a>
+  <p id="startNote">Works on the PC where you ran <code>install-start-button.cmd</code>. Windows will ask to open UIUC Seat Watcher; click Open.</p>
+</div>
 
 <a class="reg" href="https://banner.apps.uillinois.edu/StudentRegistrationSSB/ssb/registration?mepCode=1UIUC" target="_blank" rel="noopener">Open UIUC Register for Classes &rarr;</a>
 
@@ -77,21 +85,36 @@ function renderState() {
   const age = Date.now() - Date.parse(status.lastCheckAt);
   if (status.stoppedAt) {
     box.className = 'state';
+    showStart(true);
     $('stateText').textContent = 'Stopped';
     $('stateDetail').textContent = `Watcher was stopped ${ago(status.stoppedAt)}.`;
   } else if (!status.lastCheckAt || age > staleAfter) {
     box.className = 'state bad';
+    showStart(true);
     $('stateText').textContent = 'Not checking';
     $('stateDetail').textContent = status.lastCheckAt
       ? `No check reported for ${ago(status.lastCheckAt).replace(' ago', '')}. Is the PC on and the watcher running?`
       : 'The watcher has not reported yet.';
   } else {
     box.className = 'state ok';
+    showStart(false);
     $('stateText').textContent = 'Checking';
     $('stateDetail').textContent =
       `Last check ${ago(status.lastCheckAt)} · every ${status.pollSeconds}s · ${status.checks.toLocaleString()} checks since ${clock(status.startedAt)}`;
   }
 }
+
+// The button uses a link type registered on the PC by install-start-button.cmd; phones can't run it.
+const IS_PHONE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+function showStart(show) {
+  $('start').hidden = !show;
+  if (IS_PHONE) {
+    $('startLink').hidden = true;
+    $('startNote').textContent = 'To start it, open this page on your PC and click Start, or double-click start-watcher.cmd.';
+  }
+}
+// A fresh watcher reports within seconds; check sooner than the normal refresh so the page flips to Checking.
+$('startLink').addEventListener('click', () => [10_000, 25_000, 45_000].forEach((ms) => setTimeout(refresh, ms)));
 
 function render() {
   $('term').textContent = `${status.term} · ${status.sections.length} section(s)`;
