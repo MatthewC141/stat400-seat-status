@@ -34,13 +34,22 @@
   .start { margin: -8px 0 20px; }
   .start a { display: inline-block; padding: 10px 18px; border-radius: 10px; background: var(--ok); color: #fff; font-weight: 600; text-decoration: none; }
   .start p { color: var(--muted); font-size: .85rem; margin: 6px 0 0; }
+  .alarm { padding: 16px; border-radius: 12px; background: var(--bad); color: #fff; font-size: 1.15rem; font-weight: 700; margin-bottom: 20px; text-align: center; animation: flash 1s steps(2) infinite; }
+  .alarm span { display: block; font-size: .9rem; font-weight: 400; }
+  @keyframes flash { 50% { opacity: .75; } }
+  .sound { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: .9rem; color: var(--muted); margin: -8px 0 20px; }
+  .sound button { font: inherit; padding: 4px 12px; border-radius: 8px; border: 1px solid #8886; background: none; color: inherit; cursor: pointer; }
 </style>
 </head>
 <body>
 <h1>Seat watcher</h1>
 <p class="sub" id="term">Loading...</p>
 
+<div class="alarm" id="alarm" hidden>&#128680; SEAT OPEN<span>Click anywhere on the page to stop the alarm</span></div>
+
 <div class="state" id="state"><div class="dot"></div><div><b id="stateText">Loading...</b><span id="stateDetail"></span></div></div>
+
+<div class="sound"><span id="soundNote">&#128263; Click anywhere on this page once to allow the alarm sound.</span><button id="testSound" type="button">Test alarm</button></div>
 
 <div class="start" id="start" hidden>
   <a id="startLink" href="uiuc-seat-watcher://start">&#9654; Start watcher on this PC</a>
@@ -124,6 +133,7 @@ function render() {
     .join('');
   $('events').innerHTML = status.events.map((e) => `<li><time>${clock(e.at)}</time>${esc(e.text)}</li>`).join('');
   renderState();
+  updateAlarm();
 }
 
 async function refresh() {
@@ -145,9 +155,86 @@ async function refresh() {
   }
 }
 
+// Alarm: rings while any section is open that you haven't acknowledged; any click or key press
+// acknowledges. Beeps are scheduled ~90s ahead on the audio clock so background-tab timer
+// throttling can't silence it between page timers.
+let audio = null;
+let alarmGain = null;
+let scheduledUntil = 0;
+const acked = new Set();
+
+function unlockAudio() {
+  audio ??= new AudioContext();
+  if (audio.state === 'suspended') audio.resume().then(updateSoundNote);
+  updateSoundNote();
+}
+function updateSoundNote() {
+  const on = audio?.state === 'running';
+  $('soundNote').textContent = on ? '\u{1F514} Alarm sound is on. Keep this tab open.' : '\u{1F507} Click anywhere on this page once to allow the alarm sound.';
+}
+function beep(dest, at, freq) {
+  const osc = audio.createOscillator();
+  const env = audio.createGain();
+  osc.type = 'square';
+  osc.frequency.value = freq;
+  env.gain.setValueAtTime(0, at);
+  env.gain.linearRampToValueAtTime(1, at + 0.01);
+  env.gain.setValueAtTime(1, at + 0.17);
+  env.gain.linearRampToValueAtTime(0, at + 0.2);
+  osc.connect(env).connect(dest);
+  osc.start(at);
+  osc.stop(at + 0.21);
+}
+const burst = (dest, at) => [880, 660, 880, 660].forEach((f, i) => beep(dest, at + i * 0.25, f));
+function ring() {
+  if (audio?.state !== 'running') return;
+  if (!alarmGain) {
+    alarmGain = audio.createGain();
+    alarmGain.gain.value = 0.25;
+    alarmGain.connect(audio.destination);
+    scheduledUntil = audio.currentTime + 0.05;
+  }
+  for (; scheduledUntil < audio.currentTime + 90; scheduledUntil += 2.5) burst(alarmGain, scheduledUntil);
+}
+function silence() {
+  alarmGain?.disconnect(); // drops every beep already scheduled
+  alarmGain = null;
+}
+function updateAlarm() {
+  if (!status) return;
+  const open = status.sections.filter((s) => s.open).map((s) => s.crn);
+  for (const crn of [...acked]) if (!open.includes(crn)) acked.delete(crn); // filled again: re-arm
+  const ringing = open.some((crn) => !acked.has(crn));
+  $('alarm').hidden = !ringing;
+  document.title = ringing ? '\u{1F6A8} SEAT OPEN' : 'Seat watcher';
+  if (ringing) ring();
+  else silence();
+}
+function acknowledge() {
+  unlockAudio();
+  if (status) status.sections.filter((s) => s.open).forEach((s) => acked.add(s.crn));
+  updateAlarm();
+}
+document.addEventListener('pointerdown', acknowledge);
+document.addEventListener('keydown', acknowledge);
+$('testSound').addEventListener('click', () => {
+  unlockAudio();
+  const test = audio.createGain();
+  test.gain.value = 0.25;
+  test.connect(audio.destination);
+  burst(test, audio.currentTime + 0.05);
+});
+try {
+  audio = new AudioContext(); // allowed without a click if this browser already trusts the site
+} catch {}
+updateSoundNote();
+
 refresh();
 setInterval(refresh, REFRESH_MS);
-setInterval(renderState, 1000);
+setInterval(() => {
+  renderState();
+  updateAlarm(); // also tops up the scheduled beeps while ringing
+}, 1000);
 document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && refresh());
 </script>
 </body>
