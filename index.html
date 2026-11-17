@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Seat watcher</title>
+<style>
+  :root { color-scheme: light dark; --ok: #1a9c4a; --bad: #d23b3b; --idle: #8a8a8a; --open: #1a9c4a; --muted: #888; }
+  body { font: 16px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; max-width: 720px; margin: 0 auto; padding: 20px 16px 40px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .state { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: 12px; border: 1px solid #8884; margin-bottom: 20px; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--idle); flex: none; }
+  .state.ok .dot { background: var(--ok); animation: pulse 1.6s ease-in-out infinite; }
+  .state.bad .dot { background: var(--bad); }
+  @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 #1a9c4a88; } 50% { box-shadow: 0 0 0 8px #1a9c4a00; } }
+  .state b { font-size: 1.15rem; display: block; }
+  .state span { color: var(--muted); font-size: .9rem; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #8883; }
+  th { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  td.num { font-variant-numeric: tabular-nums; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: .85rem; font-weight: 600; }
+  .pill.open { background: #1a9c4a22; color: var(--open); }
+  .pill.full { background: #8883; }
+  tr.open td { background: #1a9c4a14; }
+  h2 { font-size: 1rem; margin: 0 0 8px; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li { padding: 6px 0; border-bottom: 1px solid #8882; font-size: .92rem; }
+  li time { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
+  a.reg { display: inline-block; margin-bottom: 20px; }
+  .err { color: var(--bad); font-size: .9rem; }
+</style>
+</head>
+<body>
+<h1>Seat watcher</h1>
+<p class="sub" id="term">Loading...</p>
+
+<div class="state" id="state"><div class="dot"></div><div><b id="stateText">Loading...</b><span id="stateDetail"></span></div></div>
+
+<a class="reg" href="https://banner.apps.uillinois.edu/StudentRegistrationSSB/ssb/registration?mepCode=1UIUC" target="_blank" rel="noopener">Open UIUC Register for Classes &rarr;</a>
+
+<table>
+  <thead><tr><th>Section</th><th>CRN</th><th>Seats</th><th>Status</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+
+<h2>Recent activity</h2>
+<ul id="events"></ul>
+<p class="err" id="error"></p>
+
+<script>
+// The watcher on the PC writes status.json into this secret gist; this page only reads it.
+const GIST_ID = '3199fa83fe9b0c5d2becb4f3e3aca112';
+const REFRESH_MS = 75_000; // unauthenticated GitHub API allows 60 requests/hour per viewer
+
+let status = null;
+let etag = null;
+
+const $ = (id) => document.getElementById(id);
+const ago = (iso) => {
+  const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s ago`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m ago`;
+};
+const clock = (iso) => new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+function renderState() {
+  if (!status) return;
+  const box = $('state');
+  // The watcher checks every pollSeconds but only publishes every statusEverySeconds, and this page
+  // only fetches every REFRESH_MS, so allow all three plus slack before calling it stale.
+  const staleAfter = (status.pollSeconds * 1.2 + status.statusEverySeconds + REFRESH_MS / 1000 + 60) * 1000;
+  const age = Date.now() - Date.parse(status.lastCheckAt);
+  if (status.stoppedAt) {
+    box.className = 'state';
+    $('stateText').textContent = 'Stopped';
+    $('stateDetail').textContent = `Watcher was stopped ${ago(status.stoppedAt)}.`;
+  } else if (!status.lastCheckAt || age > staleAfter) {
+    box.className = 'state bad';
+    $('stateText').textContent = 'Not checking';
+    $('stateDetail').textContent = status.lastCheckAt
+      ? `No check reported for ${ago(status.lastCheckAt).replace(' ago', '')}. Is the PC on and the watcher running?`
+      : 'The watcher has not reported yet.';
+  } else {
+    box.className = 'state ok';
+    $('stateText').textContent = 'Checking';
+    $('stateDetail').textContent =
+      `Last check ${ago(status.lastCheckAt)} · every ${status.pollSeconds}s · ${status.checks.toLocaleString()} checks since ${clock(status.startedAt)}`;
+  }
+}
+
+function render() {
+  $('term').textContent = `${status.term} · ${status.sections.length} section(s)`;
+  $('rows').innerHTML = status.sections
+    .map((s) => `<tr class="${s.open ? 'open' : ''}"><td>${esc(s.name)}</td><td class="num">${esc(s.crn)}</td>` +
+      `<td class="num">${s.seats ?? '?'}</td><td><span class="pill ${s.open ? 'open' : 'full'}">${s.open ? 'OPEN' : 'Full'}</span></td></tr>`)
+    .join('');
+  $('events').innerHTML = status.events.map((e) => `<li><time>${clock(e.at)}</time>${esc(e.text)}</li>`).join('');
+  renderState();
+}
+
+async function refresh() {
+  try {
+    const res = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+      headers: etag ? { 'If-None-Match': etag } : {},
+      cache: 'no-store',
+    });
+    if (res.status === 304) return; // unchanged; doesn't count against the rate limit
+    if (res.status === 403 || res.status === 429) throw new Error('GitHub rate limit hit (too many open tabs?). Retrying shortly.');
+    if (!res.ok) throw new Error(`GitHub returned HTTP ${res.status}`);
+    etag = res.headers.get('ETag');
+    const gist = await res.json();
+    status = JSON.parse(gist.files['status.json'].content);
+    $('error').textContent = '';
+    render();
+  } catch (e) {
+    $('error').textContent = `Could not load status: ${e.message}`;
+  }
+}
+
+refresh();
+setInterval(refresh, REFRESH_MS);
+setInterval(renderState, 1000);
+document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && refresh());
+</script>
+</body>
+</html>
