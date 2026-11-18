@@ -92,11 +92,21 @@ function renderState() {
   // only fetches every REFRESH_MS, so allow all three plus slack before calling it stale.
   const staleAfter = (status.pollSeconds * 1.2 + status.statusEverySeconds + REFRESH_MS / 1000 + 60) * 1000;
   const age = Date.now() - Date.parse(status.lastCheckAt);
-  if (status.stoppedAt) {
+  if (status.registered) {
+    box.className = 'state ok';
+    showStart(false);
+    $('stateText').textContent = `\u2705 Registered for ${status.registered}`;
+    $('stateDetail').textContent = `Auto-registered ${ago(status.stoppedAt)}; the watcher has stopped.`;
+  } else if (status.stoppedAt) {
     box.className = 'state';
     showStart(true);
     $('stateText').textContent = 'Stopped';
     $('stateDetail').textContent = `Watcher was stopped ${ago(status.stoppedAt)}.`;
+  } else if (!status.lastCheckAt && status.autoRegister && Date.now() - Date.parse(status.startedAt) < 16 * 60_000) {
+    box.className = 'state bad';
+    showStart(false);
+    $('stateText').textContent = 'Waiting for login';
+    $('stateDetail').textContent = 'Log in with NetID + Duo in the Edge window on your PC to start auto-registering.';
   } else if (!status.lastCheckAt || age > staleAfter) {
     box.className = 'state bad';
     showStart(true);
@@ -107,7 +117,7 @@ function renderState() {
   } else {
     box.className = 'state ok';
     showStart(false);
-    $('stateText').textContent = 'Checking';
+    $('stateText').textContent = status.autoRegister ? 'Checking \u00b7 auto-register ON' : 'Checking';
     $('stateDetail').textContent =
       `Last check ${ago(status.lastCheckAt)} · every ${status.pollSeconds}s · ${status.checks.toLocaleString()} checks since ${clock(status.startedAt)}`;
   }
