@@ -119,7 +119,7 @@ function renderState() {
     showStart(false);
     $('stateText').textContent = status.autoRegister ? 'Checking \u00b7 auto-register ON' : 'Checking';
     $('stateDetail').textContent =
-      `Last check ${ago(status.lastCheckAt)} · every ${status.pollSeconds}s · ${status.checks.toLocaleString()} checks since ${clock(status.startedAt)}`;
+      `Checks Banner every ${status.pollSeconds}s · ${status.checks.toLocaleString()} checks since ${clock(status.startedAt)} · this page last updated ${ago(status.lastCheckAt)} (updates about once a minute)`;
   }
 }
 
